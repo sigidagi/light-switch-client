@@ -16,67 +16,42 @@
  *    limitations under the License.
  */
 
+
 #include <AppMain.h>
+#include "SwitchHandler.h"
 
 #include <app-common/zap-generated/ids/Attributes.h>
 #include <app-common/zap-generated/ids/Clusters.h>
 #include <app/ConcreteAttributePath.h>
 #include <app/clusters/network-commissioning/network-commissioning.h>
-#include <app/server/Server.h>
 #include <lib/support/logging/CHIPLogging.h>
-
-#if CHIP_DEVICE_LAYER_TARGET_DARWIN
-#include <platform/Darwin/NetworkCommissioningDriver.h>
-#if CHIP_DEVICE_CONFIG_ENABLE_WIFI
-#include <platform/Darwin/WiFi/NetworkCommissioningWiFiDriver.h>
-#endif // CHIP_DEVICE_CONFIG_ENABLE_WIFI
-#endif // CHIP_DEVICE_LAYER_TARGET_DARWIN
-
-#if CHIP_DEVICE_LAYER_TARGET_LINUX
 #include <platform/Linux/NetworkCommissioningDriver.h>
-#endif // CHIP_DEVICE_LAYER_TARGET_LINUX
+
+#include <chrono>
+#include <functional>
+#include <iostream>
+#include <memory>
+#include <thread>
+#include <vector>
+#include <sstream>
+#include <iomanip>
+
 
 
 using namespace chip;
 using namespace chip::app;
 using namespace chip::app::Clusters;
+using namespace std::chrono_literals;
 
 namespace {
-
-#if CHIP_DEVICE_LAYER_TARGET_LINUX
-#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
-DeviceLayer::NetworkCommissioning::LinuxThreadDriver sThreadDriver;
-#endif // CHIP_DEVICE_CONFIG_ENABLE_THREAD
-
-#if CHIP_DEVICE_CONFIG_ENABLE_WIFI
-DeviceLayer::NetworkCommissioning::LinuxWiFiDriver sWiFiDriver;
-#endif // CHIP_DEVICE_CONFIG_ENABLE_WIFI
-
-DeviceLayer::NetworkCommissioning::LinuxEthernetDriver sEthernetDriver;
-#endif // CHIP_DEVICE_LAYER_TARGET_LINUX
-
-#if CHIP_DEVICE_LAYER_TARGET_DARWIN
-#if CHIP_DEVICE_CONFIG_ENABLE_WIFI
-DeviceLayer::NetworkCommissioning::DarwinWiFiDriver sWiFiDriver;
-#endif // CHIP_DEVICE_CONFIG_ENABLE_WIFI
-
-DeviceLayer::NetworkCommissioning::DarwinEthernetDriver sEthernetDriver;
-#endif // CHIP_DEVICE_LAYER_TARGET_DARWIN
-
-#if CHIP_DEVICE_CONFIG_ENABLE_WIFI
-Clusters::NetworkCommissioning::Instance sWiFiNetworkCommissioningInstance(0, &sWiFiDriver);
-#endif // CHIP_DEVICE_CONFIG_ENABLE_WIFI
-
-#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
-Clusters::NetworkCommissioning::Instance sThreadNetworkCommissioningInstance(0, &sThreadDriver);
-#endif // CHIP_DEVICE_CONFIG_ENABLE_THREAD
-
-Clusters::NetworkCommissioning::Instance sEthernetNetworkCommissioningInstance(0, &sEthernetDriver);
-
+DeviceLayer::NetworkCommissioning::LinuxWiFiDriver sLinuxWiFiDriver;
+Clusters::NetworkCommissioning::Instance
+    sWiFiNetworkCommissioningInstance(0, &sLinuxWiFiDriver);
 } // namespace
 
-void MatterPostAttributeChangeCallback(const chip::app::ConcreteAttributePath & attributePath, uint8_t type, uint16_t size,
-                                       uint8_t * value)
+
+
+void MatterPostAttributeChangeCallback(const chip::app::ConcreteAttributePath & attributePath, uint8_t type, uint16_t size, uint8_t * value)
 {
     /*
      *if (attributePath.mClusterId == OnOff::Id && attributePath.mAttributeId == OnOff::Attributes::OnOff::Id)
@@ -106,58 +81,59 @@ void emberAfOnOffClusterInitCallback(EndpointId endpoint)
     // TODO: implement any additional Cluster Server init actions
 }
 
-void ApplicationInit()
-{
-    const bool kThreadEnabled = {
-#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
-        LinuxDeviceOptions::GetInstance().mThread
-#else
-        false
-#endif
-    };
+void ApplicationInit() {
+  sWiFiNetworkCommissioningInstance.Init();
 
-    const bool kWiFiEnabled = {
-#if CHIP_DEVICE_CONFIG_ENABLE_WIFI
-        LinuxDeviceOptions::GetInstance().mWiFi
-#else
-        false
-#endif
-    };
-
-    if (kThreadEnabled && kWiFiEnabled)
-    {
-        // Just use the Thread one.
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
-        sThreadNetworkCommissioningInstance.Init();
+  ChipLogError(NotSpecified, "......... Thread is ENABLED");
+#elif
+  ChipLogError(NotSpecified, "......... Thread s NOT enabled!!!");
 #endif
-    }
-    else if (kThreadEnabled)
-    {
-#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
-        sThreadNetworkCommissioningInstance.Init();
-#endif
-    }
-    else if (kWiFiEnabled)
-    {
-#if CHIP_DEVICE_CONFIG_ENABLE_WIFI
-        sWiFiNetworkCommissioningInstance.Init();
-#endif
-    }
-    else
-    {
-        sEthernetNetworkCommissioningInstance.Init();
-    }
 }
 
-int main(int argc, char * argv[])
-{
-    if (ChipLinuxAppInit(argc, argv) != 0)
-    {
-        return -1;
+
+struct DataReader {
+    
+    // init TODO Mqtt client
+
+    void Output(bool state) {
+        std::cout << "Got switch state !\n";
+        // TODO - create mqtt publish topic with upated state.
+        std::cout << "State:  " << (state ? "On" : "Off") << "\n";
     }
 
+    void Run() {
+        auto instance = SwitchHandler::GetInstance();
+        instance->Init();
+        instance->SetCallback(std::bind(&DataReader::Output, this, std::placeholders::_1));
+
+        bool isOnSubscription = false;
+        std::this_thread::sleep_for(10s);
+        while (true) {
+            std::this_thread::sleep_for(3s);
+            // 
+            if (!isOnSubscription) {
+                if (instance->Subscribe()) {
+                    isOnSubscription = true;
+                }
+            }
+        } // while
+    }
+};
+
+
+
+
+int main(int argc, char * argv[])  {
+    if (ChipLinuxAppInit(argc, argv) != 0) {
+        return -1;
+    }
+    
+    DataReader reader;
+    std::thread read_thread(&DataReader::Run, reader);
+
     /*
-     *CHIP_ERROR err = LightingMgr().Init();
+     *CHIP_ERROR err = SwitchMgr().Init();
      *if (err != CHIP_NO_ERROR)
      *{
      *    ChipLogError(AppServer, "Failed to initialize lighting manager: %" CHIP_ERROR_FORMAT, err.Format());
@@ -167,6 +143,7 @@ int main(int argc, char * argv[])
      */
 
     ChipLinuxAppMainLoop();
-
+    
+    read_thread.join();
     return 0;
 }

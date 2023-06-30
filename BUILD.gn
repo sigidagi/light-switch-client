@@ -32,6 +32,7 @@ config("includes") {
 executable("light-switch-app") {
   sources = [
     "include/CHIPProjectAppConfig.h",
+    "src/SwitchHandler.cpp",
     "main.cpp",
   ]
 
